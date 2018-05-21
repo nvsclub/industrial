@@ -228,6 +228,9 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
     # gather the object to the cell
     h = handle_destino(cell, object_entries)
 
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
     if h == True:
       print('destino sucessfull', threading.current_thread())
     else: 
@@ -235,22 +238,18 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
 
 
     for machine in [first_machine, second_machine]:
+      # wait for permission to use modbus
+      modbus_user.wait()
+      # take the flag for himself
+      modbus_user.clear()
       # waits for the machine to be empty
       # refresh the state of the machine sensor
       sensor_machine = read_modbus_coil(SMachine[machine])
       # conceeds modbus_permission to another thread
       modbus_user.set()
-      while sensor_machine:
-        time.sleep(0.1)
-        # wait for permission to use modbus
-        modbus_user.wait()
-        # take the flag for himself
-        modbus_user.clear()
-        # refresh the state of the machine sensor
-        sensor_machine = read_modbus_coil(SMachine[machine])
-        # conceeds modbus_permission to another thread
-        modbus_user.set()
 
+      print('in the loop', threading.current_thread())
+      
       # waits for object to reach the machine sensor
       while not sensor_machine:
         # wait for permission to use modbus
@@ -317,6 +316,8 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
       time.sleep(0.1)
 
   print('ended thread', threading.current_thread())
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
 
 # puts all destinos to 1 as default
 def initial_config():
@@ -350,7 +351,7 @@ th4.start()
 
 time.sleep(20)
 
-th5 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, False, 1, 3, [0]))
+th5 = threading.Thread(target=handle_request, args=(modbus_user, 2, True, False, 2, 4, [2]))
 th5.start()
 
 
@@ -369,6 +370,8 @@ th5.start()
 th1.join()
 th2.join()
 th3.join()
+th4.join()
+th5.join()
 
 client_output.close()
 client_coils.close()
