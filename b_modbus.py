@@ -475,6 +475,9 @@ def handle_scheduler(modbus_user):
   stacks = [[] for _ in range(len(SRotate))]
   conn = SqlLog()
 
+  i = "SET search_path TO ii"
+  res = SqlQuery(conn,i)
+
   print(conn)
 
   while True:
@@ -493,12 +496,13 @@ def handle_scheduler(modbus_user):
 
     #print(rotator_states, previous_rotator_states)
 
-    i = "SELECT * FROM orders WHERE cell = %s and done = %s"
-    cell = 0
-    vars = (cell, False,)
-    res = SqlQueryVarOne(conn,i,vars)
+    i = "SELECT * FROM warehouse"
+    cell = 0+1
+    vars = (cell,)
+    res = SqlQuery(conn,i)
 
-    print(res, conn)
+    for x in res:
+      print(x)
 
     # refresh which machines are free and which machines are ocupied
     modbus_user.wait()
