@@ -1,6 +1,8 @@
 from pymodbus.client.sync import ModbusTcpClient
 import time
 import threading
+import psycopg2
+
 
 # MODBUS MES <-> PLC constants
 EnableStorage = 0
@@ -26,6 +28,8 @@ TCP_PORT_coils = '5503'
 
 client_coils = ModbusTcpClient(TCP_IP_coils, TCP_PORT_coils)
 client_output = ModbusTcpClient(TCP_IP_coils, '5504')
+
+#### MODBUS
 
 def write_modbus_coil(memory_position, coil):
 	client_coils.write_coil(memory_position, coil)
@@ -61,11 +65,87 @@ def read_modbus_multiple_registers(memory_position, no_registers):
 	reg = client_output.read_holding_registers(memory_position, no_registers)
 	return reg.registers
 
+######################################
+########### SQL FUNCTIONS ############
+######################################
 
+def SqlLog():
+
+    log = open("login.txt", 'r')
+    info = log.read().splitlines()
+    try:
+        myconn=psycopg2.connect(host=info[0], user=info[1], password=info[2], dbname=info[3])
+        myconn.autocommit = True
+    except:
+        print ("Error Connecting to SQL SERVER")
+        return -1
+
+    try:
+        cur = myconn.cursor()
+    except:
+        print("ERROR CONNECTING TO SQL DATABASE")
+        return -1
+
+    log.close()
+    return myconn
+
+def SqlQuery(conn, cmd):
+
+    cur = conn.cursor()
+    try:
+        cur.execute(cmd)
+        result = cur.fetchall()
+        return result
+    except psycopg2.Error:
+        return -1
+
+def SqlQueryVarOne(conn, cmd, vars):
+
+	cur = conn.cursor()
+	try:
+		cur.execute(cmd, vars)
+		result = cur.fetchone()
+		return result
+	except psycopg2.Error:
+		return -1
+
+def SqlCount(conn,cmd):
+    cur = conn.cursor()
+    try:
+        cur.execute(cmd)
+        result = cur.rowcount
+        return result
+    except psycopg2.Error:
+        return -1
+
+def SqlCreate(conn, cmd):
+    cur = conn.cursor()
+    try:
+        result = cur.execute(cmd)
+        return result
+    except psycopg2.Error:
+        return -1
+
+def SqlCreateVar(conn, cmd, vars):
+    cur = conn.cursor()
+    try:
+        result = cur.execute(cmd,vars)
+        return result
+    except:
+        return -1
+
+def SqlClose(myconn):
+    myconn.close()
+
+# tells the storage which object to output
+# requires: (px) object to be taken out
 def handle_choose_object(px):
   # choose object
   write_modbus_register(TakeObjectID, px)
 
+# verifies if it is possible and takes the object out of the storage
+# returns: False if the storage belt is ocupied
+# True if everything worked
 def handle_flag_storage_output():
   if read_modbus_coil(SStorage):
     return False
@@ -73,6 +153,9 @@ def handle_flag_storage_output():
   write_modbus_coil(EnableStorage, True)
   return True
 
+# checks if the object has reached the belt
+# returns: False if the object hasnt reached yet
+# True if it has reached
 def handle_object_out():
   # waits for the object to be in the storage belt
   if read_modbus_coil(SStorage):
@@ -80,27 +163,6 @@ def handle_object_out():
     write_modbus_coil(EnableStorage, False)
     return True
   return False
-
-'''# takes an object out of the storage into the belt
-# requires: (px) object to be taken out
-# returns: true if everything worked
-def handle_storage(px):
-  # choose object
-  write_modbus_register(TakeObjectID, px)
-  # checks and waits for storage belt to be empty
-  while read_modbus_coil(SStorage):
-    pass
-  # takes the object out of the storage
-  write_modbus_coil(EnableStorage, True)
-  # waits for the object to be in the storage belt
-  while not read_modbus_coil(SStorage):
-    pass
-  # waits for the object to be out of the storage belt
-  while read_modbus_coil(SStorage):
-    pass
-  # resets the storage variable
-  write_modbus_coil(EnableStorage, False)
-  return True'''
 
 # verifies if the machine is already being used by another thread
 # requires: (machine_id) machine to be verified
@@ -208,7 +270,7 @@ def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machi
     handle_choose_object(px1)
     # conceeds modbus_permission to another thread
     modbus_user.set()
-
+    time.sleep(0.1)
 
     # if it is possible, flag the storage to output the object
     # wait for permission to use modbus
@@ -219,6 +281,7 @@ def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machi
     # conceeds modbus_permission to another thread
     modbus_user.set()
     while not h:
+      time.sleep(0.1)
       # wait for permission to use modbus
       modbus_user.wait()
       # take the flag for himself
@@ -236,6 +299,7 @@ def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machi
     # conceeds modbus_permission to another thread
     modbus_user.set()
     while not h:
+      time.sleep(0.1)
       # wait for permission to use modbus
       modbus_user.wait()
       # take the flag for himself
@@ -390,6 +454,103 @@ def initial_config():
     write_modbus_register(Destino[destino], 1)
   return
 
+# check if there is any object passing by the rotator
+# return: array with the rotator states
+def handle_check_rotators():
+  rotator_states = []
+  for rotative_id in range(len(SRotate)):
+    rotator_states.append(read_modbus_coil(SRotate[rotative_id]))
+  return rotator_states
+
+def handle_check_machines():
+  machine_states = []
+  for machine_id in range(len(SMachine)):
+    machine_states.append(read_modbus_coil(SMachine[machine_id]))
+  return machine_states
+
+def handle_scheduler(modbus_user):
+  # initializations
+  previous_rotator_states = [False for _ in range(len(SRotate))]
+  previous_machine_states = [False for _ in range(len(SMachine))]
+  stacks = [[] for _ in range(len(SRotate))]
+  conn = SqlLog()
+
+  print(conn)
+
+  while True:
+
+    # check if any object has passed by a rotator
+    modbus_user.wait()
+    modbus_user.clear()
+    rotator_states = handle_check_rotators()
+    modbus_user.set()
+
+    # pop the list of objects to pass by that rotator
+    for rotator_state in range(len(rotator_states)):
+      if rotator_states[rotator_state] and not previous_rotator_states[rotator_state]:
+        previous_rotator_states[rotator_state] = rotator_states[rotator_state]
+        stacks[rotator_state].pop(0)
+
+    #print(rotator_states, previous_rotator_states)
+
+    i = "SELECT * FROM orders WHERE cell = %s and done = %s"
+    cell = 0
+    vars = (cell, False,)
+    res = SqlQueryVarOne(conn,i,vars)
+
+    print(res, conn)
+
+    # refresh which machines are free and which machines are ocupied
+    modbus_user.wait()
+    modbus_user.clear()
+    machine_states = handle_check_machines()
+    modbus_user.set()
+    # always prioritize machine 1
+    for machine_state in range(0,len(machine_states),2):
+      cell = machine_state/2
+      # check if there is any free cell
+      if machine_states[machine_state] and machine_states[machine_state+1]:
+        # select a order for the cell
+        i = "SELECT * FROM orders WHERE cell = %s and done = %s"
+        vars = (cell, False)
+        res = SqlQueryVarOne(conn,i,vars)
+
+        # refresh stacks for the rotators
+        for c in range(cell+1):
+          stack[c].append(cell)
+
+        # create thread to process the order
+        #th = threading.Thread(target=handle_request, args=(modbus_user, res[3], res[4], res[5], res[6], res[7], res[8], res[9], stacks[cell]))
+        th.start()
+
+        # update the database to signal order received
+        i = "UPDATE orders SET done = %s WHERE id = %s"
+        ########################################################################## INDIVIDUAL ID
+        var = (True, res[0])
+        res = SqlCreateVar(conn,i,var)
+
+      # check if there is any free machine 1
+      elif machine_states[machine_state]:
+        #SELECTS PATH TO TAKE AND SELECTS FORMULA
+        i = "SELECT * FROM orders WHERE cell = %s and machine = %s and done = %s"
+        vars = (cell, 1, False)
+        res = SqlQueryVarOne(conn,i,vars)
+
+        # refresh stacks for the rotators
+        for c in range(cell+1):
+          stack[c].append(cell)
+
+        # create thread to process the order
+        #th = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
+        th.start()
+
+        # update the database to signal order received
+        i = "UPDATE orders SET done = %s WHERE id = %s"
+        ########################################################################## INDIVIDUAL ID
+        var = (True, res[0])
+        res = SqlCreateVar(conn,i,var)
+
+  SqlClose(conn)
 
 # tests for handle_request
 # threads
@@ -398,7 +559,9 @@ initial_config()
 modbus_user = threading.Event()
 modbus_user.set()
 
-th1 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
+handle_scheduler(modbus_user)
+
+'''th1 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
 th1.start()
 
 time.sleep(5)
@@ -420,7 +583,7 @@ th4.start()
 th1.join()
 th2.join()
 th3.join()
-th4.join()
+th4.join()'''
 
 
 client_output.close()
