@@ -122,12 +122,13 @@ def handle_destino(rotative_id, destino_array):
   # check if the piece if for himself
   if rotative_id == destino_array[0]:
     write_modbus_register(Destino[rotative_id], 2)
-    # wait and reset the destino variable
-    time.sleep(2)
+    while read_modbus_coil(SRotate[rotative_id]):
+      pass
     write_modbus_register(Destino[rotative_id], 1)
   else:
     write_modbus_register(Destino[rotative_id], 1)
-    time.sleep(2)
+    while read_modbus_coil(SRotate[rotative_id]):
+      pass
     write_modbus_register(Destino[rotative_id], 0)
   return True
 
@@ -149,12 +150,11 @@ def handle_cell_usage(cell):
 # handles the complete procedure of processing until the object leaves the second machine
 # requires: (cell) cell where processing happens,
 # (modbus_user) flag to allow or disallow modbus interaction
-# (first_machine_used) flag to tell if first machine is used
-# (second_machine_used) flag to tell if second machine is used
+# (x_machine_used) flag to tell if x machine is used
 # (px) initial state, (py) final state of the object
 # (object_entries) list of objects on the top belts that are going to pass by the cell
 # returns: True if everything was sucessfull and False if any error ocurred
-def handle_request(modbus_user, cell, first_machine_used, second_machine_used, px, py, object_entries):
+def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machine_used, px2, py2, object_entries):
   first_machine = cell * 2
   second_machine = cell * 2 + 1
 
@@ -163,15 +163,14 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
   # take the flag for himself
   modbus_user.clear()
   # verifies if the machines needed are free
-  if (handle_verify_machine(first_machine) and first_machine_used) or (handle_verify_machine(second_machine) and second_machine_used):
+  #print(handle_verify_machine(first_machine))
+  #print((handle_verify_machine(first_machine) and first_machine_used and not second_machine_used))
+  if (handle_verify_machine(first_machine) and first_machine_used and not second_machine_used) or (handle_verify_machine(second_machine) and second_machine_used and not first_machine_used) or (handle_verify_machine(first_machine) and first_machine_used and handle_verify_machine(second_machine) and second_machine_used):
     # reserves the machine
     if handle_verify_machine(first_machine) and first_machine_used:
-      h = handle_reserve_machine(first_machine)
-    elif handle_verify_machine(second_machine) and second_machine_used:
-      h = handle_reserve_machine(second_machine)
-    if not h == True:
-      print('machine reservation failed', threading.current_thread())
-      return False
+      handle_reserve_machine(first_machine)
+    if handle_verify_machine(second_machine) and second_machine_used:
+      handle_reserve_machine(second_machine)
 
     print('machines reserved', threading.current_thread())
 
@@ -179,10 +178,9 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
     handle_cell_usage(cell)
 
     # take out the object
-    h = handle_storage(px)
+    handle_storage(px1)
 
-    if h == True:
-      print('storage sucessfull', threading.current_thread())
+    print('storage sucessfull', threading.current_thread())
 
     # conceeds modbus_permission to another thread
     modbus_user.set()
@@ -226,16 +224,12 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
     modbus_user.clear()
 
     # gather the object to the cell
-    h = handle_destino(cell, object_entries)
+    handle_destino(cell, object_entries)
 
     # conceeds modbus_permission to another thread
     modbus_user.set()
 
-    if h == True:
-      print('destino sucessfull', threading.current_thread())
-    else: 
-      print('destino failed', threading.current_thread())
-
+    print('destino sucessfull', threading.current_thread())
 
     for machine in [first_machine, second_machine]:
       # wait for permission to use modbus
@@ -265,12 +259,18 @@ def handle_request(modbus_user, cell, first_machine_used, second_machine_used, p
       print('got into the machine', threading.current_thread())
 
       # checks if the first machine is used and executes
-      if (machine == first_machine and first_machine_used) or (machine == second_machine and second_machine_used):
+      if machine == first_machine and first_machine_used:
         # wait for permission to use modbus
         modbus_user.wait()
         # take the flag for himself
         modbus_user.clear()
-        handle_machine_processing(machine, px, py)
+        handle_machine_processing(machine, px1, py1)
+      elif machine == second_machine and second_machine_used:
+        # wait for permission to use modbus
+        modbus_user.wait()
+        # take the flag for himself
+        modbus_user.clear()
+        handle_machine_processing(machine, px2, py2)
       else:
         # wait for permission to use modbus
         modbus_user.wait()
@@ -331,47 +331,45 @@ initial_config()
 modbus_user = threading.Event()
 modbus_user.set()
 
-th1 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, False, 1, 3, [0]))
+th1 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
 th1.start()
+'''
+time.sleep(20)
 
-time.sleep(10)
-
-th2 = threading.Thread(target=handle_request, args=(modbus_user, 1, True, False, 1, 3, [1]))
+th2 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 0, 0, [0]))
 th2.start()
 
 time.sleep(20)
 
-th3 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, False, 1, 3, [0]))
+th3 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 0, 0, [0]))
 th3.start()
-
-time.sleep(13)
-
-th4 = threading.Thread(target=handle_request, args=(modbus_user, 1, True, False, 1, 3, [1]))
-th4.start()
 
 time.sleep(20)
 
-th5 = threading.Thread(target=handle_request, args=(modbus_user, 2, True, False, 2, 4, [2]))
-th5.start()
+th4 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 0, 0, [0]))
+th4.start()
+'''
+time.sleep(5)
 
+th2 = threading.Thread(target=handle_request, args=(modbus_user, 1, True, 1, 7, True, 7, 8, [1]))
+th2.start()
 
-'''while(1):
-  status = modbus_user.is_set
-  t = time.time()
-  while t - time.time() > 2:
-    if not status == modbus_user.is_set:
-      continue
-    pass
-  if modbus_user.is_set == status:
-    print(status == True)
-    print(threading.enumerate())
-    #modbus_user.set()'''
+time.sleep(5)
+
+th3 = threading.Thread(target=handle_request, args=(modbus_user, 2, True, 2, 8, True, 8, 9, [2]))
+th3.start()
+
+time.sleep(50)
+
+th4 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 10, 10, [0]))
+th4.start()
+
   
 th1.join()
 th2.join()
 th3.join()
 th4.join()
-th5.join()
+#th5.join()
 
 client_output.close()
 client_coils.close()
