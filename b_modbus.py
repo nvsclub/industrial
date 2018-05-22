@@ -61,7 +61,27 @@ def read_modbus_multiple_registers(memory_position, no_registers):
 	reg = client_output.read_holding_registers(memory_position, no_registers)
 	return reg.registers
 
-# takes an object out of the storage into the belt
+
+def handle_choose_object(px):
+  # choose object
+  write_modbus_register(TakeObjectID, px)
+
+def handle_flag_storage_output():
+  if read_modbus_coil(SStorage):
+    return False
+  # takes the object out of the storage
+  write_modbus_coil(EnableStorage, True)
+  return True
+
+def handle_object_out():
+  # waits for the object to be in the storage belt
+  if read_modbus_coil(SStorage):
+    # resets the storage variable
+    write_modbus_coil(EnableStorage, False)
+    return True
+  return False
+
+'''# takes an object out of the storage into the belt
 # requires: (px) object to be taken out
 # returns: true if everything worked
 def handle_storage(px):
@@ -80,7 +100,7 @@ def handle_storage(px):
     pass
   # resets the storage variable
   write_modbus_coil(EnableStorage, False)
-  return True
+  return True'''
 
 # verifies if the machine is already being used by another thread
 # requires: (machine_id) machine to be verified
@@ -177,8 +197,53 @@ def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machi
     # tell the rotator to wait for an object
     handle_cell_usage(cell)
 
-    # take out the object
-    handle_storage(px1)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+    # tell the storage the object to process
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    handle_choose_object(px1)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+
+    # if it is possible, flag the storage to output the object
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_flag_storage_output()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+    while not h:
+      # wait for permission to use modbus
+      modbus_user.wait()
+      # take the flag for himself
+      modbus_user.clear()
+      h = handle_flag_storage_output()
+      # conceeds modbus_permission to another thread
+      modbus_user.set()
+
+    # checks if the object is out
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_object_out()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+    while not h:
+      # wait for permission to use modbus
+      modbus_user.wait()
+      # take the flag for himself
+      modbus_user.clear()
+      h = handle_object_out()
+      # conceeds modbus_permission to another thread
+      modbus_user.set()
+    
 
     print('storage sucessfull', threading.current_thread())
 
@@ -325,6 +390,8 @@ def initial_config():
     write_modbus_register(Destino[destino], 1)
   return
 
+
+# tests for handle_request
 # threads
 initial_config()
 
@@ -333,22 +400,7 @@ modbus_user.set()
 
 th1 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
 th1.start()
-'''
-time.sleep(20)
 
-th2 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 0, 0, [0]))
-th2.start()
-
-time.sleep(20)
-
-th3 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 0, 0, [0]))
-th3.start()
-
-time.sleep(20)
-
-th4 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 0, 0, [0]))
-th4.start()
-'''
 time.sleep(5)
 
 th2 = threading.Thread(target=handle_request, args=(modbus_user, 1, True, 1, 7, True, 7, 8, [1]))
@@ -369,7 +421,7 @@ th1.join()
 th2.join()
 th3.join()
 th4.join()
-#th5.join()
+
 
 client_output.close()
 client_coils.close()
