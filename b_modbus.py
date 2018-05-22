@@ -2,6 +2,7 @@ from pymodbus.client.sync import ModbusTcpClient
 import time
 import threading
 import psycopg2
+import copy
 
 
 # MODBUS MES <-> PLC constants
@@ -141,7 +142,10 @@ def SqlClose(myconn):
 # requires: (px) object to be taken out
 def handle_choose_object(px):
   # choose object
-  write_modbus_register(TakeObjectID, px)
+  if not client_coils.read_coils(EnableStorage, 1).bits[0]:
+    write_modbus_register(TakeObjectID, px)
+    return True
+  return False
 
 # verifies if it is possible and takes the object out of the storage
 # returns: False if the storage belt is ocupied
@@ -262,7 +266,26 @@ def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machi
     # conceeds modbus_permission to another thread
     modbus_user.set()
 
-    # tell the storage the object to process
+    # waits for the storage to be available and
+    # tells the storage the object to process
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_choose_object(px1)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+    while not h:
+      time.sleep(0.1)
+      # wait for permission to use modbus
+      modbus_user.wait()
+      # take the flag for himself
+      modbus_user.clear()
+      h = handle_choose_object(px1)
+      # conceeds modbus_permission to another thread
+      modbus_user.set()
+      
+    
     # wait for permission to use modbus
     modbus_user.wait()
     # take the flag for himself
@@ -465,13 +488,15 @@ def handle_check_rotators():
 def handle_check_machines():
   machine_states = []
   for machine_id in range(len(SMachine)):
-    machine_states.append(read_modbus_coil(SMachine[machine_id]))
+    machine_states.append(client_coils.read_coils(Ocupy[machine_id], 1).bits[0])
   return machine_states
 
 def handle_scheduler(modbus_user):
   # initializations
   previous_rotator_states = [False for _ in range(len(SRotate))]
   previous_machine_states = [False for _ in range(len(SMachine))]
+  machine_locks = [False for _ in range(len(SMachine))]
+
   stacks = [[] for _ in range(len(SRotate))]
   conn = SqlLog()
 
@@ -487,6 +512,7 @@ def handle_scheduler(modbus_user):
     modbus_user.clear()
     rotator_states = handle_check_rotators()
     modbus_user.set()
+    time.sleep(0.1)
 
     # pop the list of objects to pass by that rotator
     for rotator_state in range(len(rotator_states)):
@@ -494,65 +520,77 @@ def handle_scheduler(modbus_user):
         previous_rotator_states[rotator_state] = rotator_states[rotator_state]
         stacks[rotator_state].pop(0)
 
-    #print(rotator_states, previous_rotator_states)
-
-    i = "SELECT * FROM warehouse"
-    cell = 0+1
-    vars = (cell,)
-    res = SqlQuery(conn,i)
-
-    for x in res:
-      print(x)
-
     # refresh which machines are free and which machines are ocupied
     modbus_user.wait()
     modbus_user.clear()
     machine_states = handle_check_machines()
     modbus_user.set()
+
     # always prioritize machine 1
     for machine_state in range(0,len(machine_states),2):
-      cell = machine_state/2
+      cell = int(machine_state/2)
+
+      # liberate machine locks
+      if machine_locks[machine_state] and machine_states[machine_state]:
+        machine_locks[machine_state] = False
+      if machine_locks[machine_state + 1] and machine_states[machine_state + 1]:
+        machine_locks[machine_state + 1] = False
+
       # check if there is any free cell
-      if machine_states[machine_state] and machine_states[machine_state+1]:
+      if not machine_states[machine_state] and not machine_states[machine_state+1] and not machine_locks[machine_state] and not machine_locks[machine_state]:
         # select a order for the cell
         i = "SELECT * FROM orders WHERE cell = %s and done = %s"
-        vars = (cell, False)
+        vars = (cell + 1, False)
         res = SqlQueryVarOne(conn,i,vars)
+        
+        if res == None:
+          continue
 
         # refresh stacks for the rotators
         for c in range(cell+1):
-          stack[c].append(cell)
-
+          stacks[c].append(cell)
+        
         # create thread to process the order
-        #th = threading.Thread(target=handle_request, args=(modbus_user, res[3], res[4], res[5], res[6], res[7], res[8], res[9], stacks[cell]))
+        th = threading.Thread(target=handle_request, args=(modbus_user, res[3]-1, res[4], res[5], res[6], res[7], res[8], res[9], copy.deepcopy(stacks[cell])))
         th.start()
 
         # update the database to signal order received
         i = "UPDATE orders SET done = %s WHERE id = %s"
-        ########################################################################## INDIVIDUAL ID
         var = (True, res[0])
         res = SqlCreateVar(conn,i,var)
+
+        machine_locks[machine_state] = True
+        machine_locks[machine_state+1] = True 
+        
+
+        break
 
       # check if there is any free machine 1
-      elif machine_states[machine_state]:
-        #SELECTS PATH TO TAKE AND SELECTS FORMULA
-        i = "SELECT * FROM orders WHERE cell = %s and machine = %s and done = %s"
-        vars = (cell, 1, False)
+      elif not machine_states[machine_state] and not machine_locks[machine_state]:
+        # select a order for the machine 1 of the cell
+        i = "SELECT * FROM orders WHERE cell = %s and maq_1 = %s and done = %s"
+        vars = (cell + 1, True, False)
         res = SqlQueryVarOne(conn,i,vars)
+
+        if res == None:
+          continue
 
         # refresh stacks for the rotators
         for c in range(cell+1):
-          stack[c].append(cell)
+          stacks[c].append(cell)
 
         # create thread to process the order
-        #th = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
+        th = threading.Thread(target=handle_request, args=(modbus_user, res[3]-1, res[4], res[5], res[6], res[7], res[8], res[9], copy.deepcopy(stacks[cell])))
         th.start()
 
         # update the database to signal order received
         i = "UPDATE orders SET done = %s WHERE id = %s"
-        ########################################################################## INDIVIDUAL ID
         var = (True, res[0])
         res = SqlCreateVar(conn,i,var)
+
+        machine_locks[machine_state] = True
+
+        break
 
   SqlClose(conn)
 
