@@ -207,7 +207,7 @@ def handle_liberate_machine(machine_id):
 def handle_destino(rotative_id, destino_array):
   # check if the piece if for himself
   if rotative_id == destino_array[0]:
-    write_modbus_register(Destino[rotative_id], 2)
+    write_modbus_register(Destino[rotative_id], 0)
     while read_modbus_coil(SRotate[rotative_id]):
       pass
     write_modbus_register(Destino[rotative_id], 1)
@@ -215,7 +215,7 @@ def handle_destino(rotative_id, destino_array):
     write_modbus_register(Destino[rotative_id], 1)
     while read_modbus_coil(SRotate[rotative_id]):
       pass
-    write_modbus_register(Destino[rotative_id], 0)
+    write_modbus_register(Destino[rotative_id], 2)
   return True
 
 # tells the machine which processing steps it should make
@@ -230,7 +230,7 @@ def handle_machine_processing(machine_id, px, py):
 # sets the rotator belt to wait when a piece arrives at him
 # required: (cell) cell of the rotator to alert
 def handle_cell_usage(cell):
-  write_modbus_register(Destino[cell], 0)
+  write_modbus_register(Destino[cell], 2)
   return
 
 # handles the complete procedure of processing until the object leaves the second machine
@@ -337,6 +337,8 @@ def handle_request(modbus_user, cell, first_machine_used, px1, py1, second_machi
     # conceeds modbus_permission to another thread
     modbus_user.set()
     time.sleep(0.1)
+
+    print(object_entries, threading.current_thread())
 
     # manage rotating belts and gathers the object into the cell
     while True:
