@@ -10,20 +10,29 @@ from queue import Queue
 EnableStorage = 0
 TakeObjectID = 0
 
-Destino = [1, 6, 11]
+Destino = [1, 6, 11, 16]
 
 PX = [2, 4, 7, 9, 12, 14]
 PY = [3, 5, 8, 10, 13, 15]
 
 Ocupy = [1, 2, 3, 4, 5, 6]
 
-SRotate = [6, 7, 8]
+
+SRotate = [6, 7, 8, 16]
 
 SStorage = 15
 
 SMachine = [9, 10, 11, 12, 13, 14]
 
 SOcupy = [0, 1, 2, 3, 4, 5]
+
+OcupyRobot = 7
+
+SOcupyRobot = 16
+
+EndRobot = 8
+
+SEndRobot = 17
 
 TCP_IP_coils = '127.0.0.1'
 TCP_PORT_coils = '5503'
