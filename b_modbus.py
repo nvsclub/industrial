@@ -10,29 +10,35 @@ from queue import Queue
 EnableStorage = 0
 TakeObjectID = 0
 
-Destino = [1, 6, 11, 16]
+Destino = [1, 6, 11, 16, 17, 18, 19, 20]
 
 PX = [2, 4, 7, 9, 12, 14]
 PY = [3, 5, 8, 10, 13, 15]
 
 Ocupy = [1, 2, 3, 4, 5, 6]
 
-
-SRotate = [6, 7, 8, 25]
-
-SStorage = 15
-
-SMachine = [9, 10, 11, 12, 13, 14]
-
-SOcupy = [0, 1, 2, 3, 4, 5]
-
 OcupyRobot = 7
-
-SOcupyRobot = 16
 
 EndRobot = 8
 
+OcupyPusher = [9, 10, 11]
+
+
+SOcupy = [0, 1, 2, 3, 4, 5]
+
+SRotate = [6, 7, 8, 25, 26]
+
+SMachine = [9, 10, 11, 12, 13, 14]
+
+SStorage = 15
+
+SOcupyRobot = 16
+
 SEndRobot = 17
+
+SBeltPusher = [27, 28, 29]
+
+SRoller = [30, 31, 32]
 
 TCP_IP_coils = '127.0.0.1'
 TCP_PORT_coils = '5503'
@@ -153,6 +159,7 @@ def SqlClose(myconn):
 # True if everything worked
 def handle_flag_storage_output(px):
   if read_modbus_coil(SStorage) or client_coils.read_coils(EnableStorage, 1).bits[0]:
+    print(read_modbus_coil(SStorage), client_coils.read_coils(EnableStorage, 1).bits[0])
     return False
   # takes the object out of the storage
   write_modbus_register(TakeObjectID, px)
@@ -582,6 +589,102 @@ def handle_robot(storage_flag, modbus_user, destino_flag_take, destino_flag_give
     modbus_user.set()
 
 
+def handle_verify_pusher_ocupation(id):
+  if client_coils.read_coils(OcupyPusher[id], 1).bits[0]:
+    return False
+  write_modbus_coil(OcupyPusher[id], True)
+  return True
+
+def handle_liberate_pusher(id):
+  if client_coils.read_coils(OcupyPusher[id], 1).bits[0]:
+    write_modbus_coil(OcupyPusher[id], False)
+    return True
+  return False
+
+def handle_pusher(storage_flag, modbus_user, destino_flag_take, destino_flag_push, pusher_id, px):
+  # verify if pusher is available
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = handle_verify_pusher_ocupation(pusher_id)
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_verify_pusher_ocupation(pusher_id)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  # handle storage
+  storage_flag.wait()
+  storage_flag.clear()
+
+  # if it is possible, flag the storage to output the object
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+
+
+  h = handle_flag_storage_output(px)
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_flag_storage_output(px)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  # waits for the object to be in the belt
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = handle_object_out()
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_object_out()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  storage_flag.set()
+
+
+  # wait destino decision
+  while not destino_flag_take.isSet():
+    pass
+
+  destino_flag_take.clear()
+
+  # wait for pieces to be in the pusher
+  destino_flag_push.clear()
+  
+  while not destino_flag_push.isSet():
+    pass
+  
+  # liberate the pusher
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  handle_liberate_pusher(id)
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+
 
 
 # puts all destinos to 2 as default
@@ -589,7 +692,6 @@ def initial_config():
   for destino in range(len(Destino)):
     write_modbus_register(Destino[destino], 2)
   return
-
 
 def handle_check_machines():
   machine_states = []
@@ -602,6 +704,13 @@ def handle_check_robot():
     return False
   return True
 
+def handle_check_pushers():
+  pusher_states = []
+  for pusher_id in range(len(SBeltPusher)):
+    pusher_states.append(client_coils.read_coils(OcupyPusher[pusher_id], 1).bits[0])
+  return pusher_states
+  
+
 
 def handle_scheduler(modbus_user):
   # initializations
@@ -609,12 +718,18 @@ def handle_scheduler(modbus_user):
   previous_machine_states = [False for _ in range(len(SMachine))]
   machine_locks = [False for _ in range(len(SMachine))]
   robot_lock = False
+  pusher_locks = [False for _ in range(len(SBeltPusher))]
 
   destino_flag_take_1 = threading.Event()
   destino_flag_take_2 = threading.Event()
   destino_flag_take_3 = threading.Event()
   destino_flag_take_4 = threading.Event()
+  destino_flag_take_5 = threading.Event()
   destino_flag_give = threading.Event()
+  destino_flag_push_1 = threading.Event()
+  destino_flag_push_2 = threading.Event()
+  destino_flag_push_3 = threading.Event()
+  
 
   storage_flag = threading.Event()
   storage_flag.set()
@@ -624,8 +739,12 @@ def handle_scheduler(modbus_user):
   stack_1 = Queue()
   stack_2 = Queue()
   stack_3 = Queue()
+  stack_4 = Queue()
+  stack_5 = Queue()
+  stack_6 = Queue()
+  stack_7 = Queue()
 
-  th = threading.Thread(target=destino_manager, args=(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_give, stack_0, stack_1, stack_2, stack_3))
+  th = threading.Thread(target=destino_manager, args=(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_take_5, destino_flag_give, destino_flag_push_1, destino_flag_push_2, destino_flag_push_3, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7))
   th.start()
 
   conn = SqlLog()
@@ -633,14 +752,13 @@ def handle_scheduler(modbus_user):
   i = "SET search_path TO ii"
   res = SqlQuery(conn,i)
 
-  print(conn)
-
   while True:
     # refresh which machines are free and which machines are ocupied
     modbus_user.wait()
     modbus_user.clear()
     machine_states = handle_check_machines()
     robot_state = handle_check_robot()
+    pusher_states = handle_check_pushers()
     modbus_user.set()
     time.sleep(3)
 
@@ -654,13 +772,10 @@ def handle_scheduler(modbus_user):
       if machine_locks[machine_state + 1] and machine_states[machine_state + 1]:
         machine_locks[machine_state + 1] = False
 
-      if robot_lock and robot_state:
-        robot_lock = False
-
       # check if there is any free cell
       if not machine_states[machine_state] and not machine_states[machine_state+1] and not machine_locks[machine_state] and not machine_locks[machine_state]:
         # select a order for the cell
-        i = "SELECT id, cell, maq_1, px_1, py_1, maq_2, px_2, py_2 FROM orders WHERE cell = %s and done = %s"
+        i = "SELECT id, cell, maq_1, px_1, py_1, maq_2, px_2, py_2 FROM orders WHERE cell = %s and done_start = %s"
         vars = (cell + 1, False)
         res = SqlQueryVarOne(conn,i,vars)
         print(res)
@@ -691,7 +806,7 @@ def handle_scheduler(modbus_user):
           th.start()
 
         # update the database to signal order received
-        i = "UPDATE orders SET done = %s WHERE id = %s"
+        i = "UPDATE orders SET done_start = %s WHERE id = %s"
         var = (True, res[0])
         res = SqlCreateVar(conn,i,var)
 
@@ -703,7 +818,7 @@ def handle_scheduler(modbus_user):
       # check if there is any free machine 1
       elif not machine_states[machine_state] and not machine_locks[machine_state]:
         # select a order for the machine 1 of the cell
-        i = "SELECT id, cell, maq_1, px_1, py_1, maq_2, px_2, py_2 FROM orders WHERE cell = %s and maq_1 = %s and done = %s"
+        i = "SELECT id, cell, maq_1, px_1, py_1, maq_2, px_2, py_2 FROM orders WHERE cell = %s and maq_1 = %s and done_start = %s"
         vars = (cell + 1, True, False)
         res = SqlQueryVarOne(conn,i,vars)
 
@@ -733,7 +848,7 @@ def handle_scheduler(modbus_user):
           th.start()
 
         # update the database to signal order received
-        i = "UPDATE orders SET done = %s WHERE id = %s"
+        i = "UPDATE orders SET done_start = %s WHERE id = %s"
         var = (True, res[0])
         res = SqlCreateVar(conn,i,var)
 
@@ -741,17 +856,21 @@ def handle_scheduler(modbus_user):
 
         break
 
-      if robot_state and not robot_lock:
-        cell = 3
-        # select a order for the robot
-        i = "SELECT px_1, py_1 FROM orders WHERE cell = %s and done = %s"
-        vars = (cell + 1, False)
-        res = SqlQueryVarOne(conn,i,vars)
-        print(res)
+    time.sleep(3)
 
-        if res == None:
-          continue
 
+    if robot_lock and robot_state:
+      robot_lock = False
+
+    if robot_state and not robot_lock:
+      cell = 3
+      # select a order for the robot
+      i = "SELECT px_1, py_1 FROM orders WHERE cell = %s and done_start = %s"
+      vars = (cell + 1, False)
+      res = SqlQueryVarOne(conn,i,vars)
+      print(res)
+
+      if not res == None:
         # refresh stacks for the rotators
         if 0 <= cell:
           stack_0.put(cell)
@@ -771,13 +890,75 @@ def handle_scheduler(modbus_user):
         th.start()
 
         # update the database to signal order received
-        i = "UPDATE orders SET done = %s WHERE id = %s"
+        i = "UPDATE orders SET done_start = %s WHERE id = %s"
         var = (True, res[0])
         res = SqlCreateVar(conn,i,var)
 
         robot_lock = True
 
+
+    time.sleep(3)
+
+
+    # check if there is any pusher
+    for id in range(len(OcupyPusher)):
+      
+      # liberate pusher locks
+      if pusher_locks[id] and pusher_states[id]:
+        pusher_locks[id] = False
+
+      if not pusher_states[id] and not pusher_locks[id]:
+        cell = 4
+        # select a order for the cell
+        i = "SELECT id, cell, px_1, py_1 FROM orders WHERE cell = %s and done_start = %s"
+        vars = (cell + 1, False)
+        res = SqlQueryVarOne(conn,i,vars)
+        print(res)
+        
+        if res == None:
+          continue
+
+        # refresh stacks for the rotators
+        if 0 <= cell:
+          stack_0.put(cell)
+        if 1 <= cell:
+          stack_1.put(cell)
+        if 2 <= cell:
+          stack_2.put(cell)
+        if 3 <= cell:
+          stack_3.put(cell)
+        if 4 <= cell:
+          stack_4.put(cell)
+        if 5 <= cell  + res[3]:
+          stack_5.put(cell + res[3])
+        if 6 <= cell + res[3]:
+          stack_6.put(cell + res[3])
+        if 7 <= cell + res[3]:
+          stack_7.put(cell + res[3])
+
+        # create thread to process the order
+        if 1 == res[3]:
+          # create thread to process the order
+          th = threading.Thread(target=handle_pusher, args=(storage_flag, modbus_user, destino_flag_take_5, destino_flag_push_1, res[3]-1, res[2]))
+          th.start()
+        if 2 == res[3]:
+          # create thread to process the order
+          th = threading.Thread(target=handle_pusher, args=(storage_flag, modbus_user, destino_flag_take_5, destino_flag_push_2, res[3]-1, res[2]))
+          th.start()
+        if 3 == res[3]:
+          # create thread to process the order
+          th = threading.Thread(target=handle_pusher, args=(storage_flag, modbus_user, destino_flag_take_5, destino_flag_push_3, res[3]-1, res[2]))
+          th.start()
+
+        # update the database to signal order received
+        i = "UPDATE orders SET done_start = %s WHERE id = %s"
+        var = (True, res[0])
+        res = SqlCreateVar(conn,i,var)
+
+        pusher_locks[id] = True
+
         break
+
 
   SqlClose(conn)
 
@@ -786,72 +967,104 @@ def handle_scheduler(modbus_user):
 # (destino_array) array of the pieces to pass by that belt
 # returns: True if the information was passed to the belt
 # False if the piece destination did not match the cell
-def handle_destino(rotative_id, rotate):
+def handle_destino(rotative_id, rotate, to_read):
   # check if the piece if for himself
   if rotate:
     write_modbus_register(Destino[rotative_id], 0)
-    while read_modbus_coil(SRotate[rotative_id]):
+    while read_modbus_coil(to_read):
       pass
     write_modbus_register(Destino[rotative_id], 2)
     return True
   else:
     write_modbus_register(Destino[rotative_id], 1)
-    while read_modbus_coil(SRotate[rotative_id]):
+    while read_modbus_coil(to_read):
       pass
     write_modbus_register(Destino[rotative_id], 2)
   return False
 
 # destino manager
-def destino_manager(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_give, stack_1, stack_2, stack_3, stack_4):
+def destino_manager(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_take_5, destino_flag_give, destino_flag_push_1, destino_flag_push_2, destino_flag_push_3, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7):
   sensor_usage = [False for _ in range(len(SRotate))]
+  for _ in range(len(SBeltPusher)):
+    sensor_usage.append(False)
   while 1:
     modbus_user.wait()
     modbus_user.clear()
     rotate_sensors = []
     for i in range(len(SRotate)):
       rotate_sensors.append(read_modbus_coil(SRotate[i]))
+    for i in range(len(SBeltPusher)):
+      rotate_sensors.append(read_modbus_coil(SBeltPusher[i]))
     modbus_user.set()
     time.sleep(0.3)
 
-    print(list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue))
-
+    print(list(stack_0.queue), list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue), list(stack_5.queue), list(stack_6.queue), list(stack_7.queue))
 
     for rotate_sensor in range(len(rotate_sensors)):
       if not rotate_sensors[rotate_sensor]:
         sensor_usage[rotate_sensor] = False
 
+    modbus_user.wait()
+    modbus_user.clear()
+
     for rotate_sensor in range(len(rotate_sensors)):
       if rotate_sensors[rotate_sensor] and not sensor_usage[rotate_sensor]:
         sensor_usage[rotate_sensor] = True
         if rotate_sensor == 0:
-          if stack_1.get() == 0:
-            handle_destino(rotate_sensor, True)
+          if stack_0.get() == 0:
+            handle_destino(rotate_sensor, True, SRotate[0])
             destino_flag_take_1.set()
           else:
-            handle_destino(rotate_sensor, False)
+            handle_destino(rotate_sensor, False, SRotate[0])
         elif rotate_sensor == 1:
-          if stack_2.get() == 1:
-            handle_destino(rotate_sensor, True)
+          if stack_1.get() == 1:
+            handle_destino(rotate_sensor, True, SRotate[1])
             destino_flag_take_2.set()
           else:
-            handle_destino(rotate_sensor, False)
+            handle_destino(rotate_sensor, False, SRotate[1])
         elif rotate_sensor == 2:
-          if stack_3.get() == 2:
-            handle_destino(rotate_sensor, True)
+          if stack_2.get() == 2:
+            handle_destino(rotate_sensor, True, SRotate[2])
             destino_flag_take_3.set()
           else:
-            handle_destino(rotate_sensor, False)
+            handle_destino(rotate_sensor, False, SRotate[2])
         elif rotate_sensor == 3:
-          if stack_4.get() == 3:
-            handle_destino(rotate_sensor, True)
+          if stack_3.get() == 3:
+            handle_destino(rotate_sensor, True, SRotate[3])
             destino_flag_take_4.set()
           else:
-            handle_destino(rotate_sensor, False)
+            handle_destino(rotate_sensor, False, SRotate[3])
+        elif rotate_sensor == 4:
+          if stack_4.get() == 4:
+            handle_destino(rotate_sensor, True, SRotate[4])
+            destino_flag_take_5.set()
+          else:
+            handle_destino(rotate_sensor, False, SRotate[4])
+        elif rotate_sensor == 5:
+          if stack_5.get() == 5:
+            handle_destino(rotate_sensor, True, SBeltPusher[0])
+            destino_flag_push_1.set()
+          else:
+            handle_destino(rotate_sensor, False, SBeltPusher[0])
+        elif rotate_sensor == 6:
+          if stack_6.get() == 6:
+            handle_destino(rotate_sensor, True, SBeltPusher[1])
+            destino_flag_push_2.set()
+          else:
+            handle_destino(rotate_sensor, False, SBeltPusher[1])
+        elif rotate_sensor == 7:
+          if stack_7.get() == 7:
+            handle_destino(rotate_sensor, True, SBeltPusher[2])
+            destino_flag_push_3.set()
+          else:
+            handle_destino(rotate_sensor, False, SBeltPusher[2])
 
     if destino_flag_give.isSet():
       if stack_4.empty():
         destino_flag_give.clear()
+        handle_destino(3, False, SRotate[3])
 
+    modbus_user.set()
 
 # tests for handle_request
 # threads

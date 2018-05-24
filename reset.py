@@ -76,7 +76,7 @@ i = "SET search_path TO ii"
 res = SqlQuery(conn,i)
 
 for z in range(1,50):
-  i = "UPDATE orders SET done = %s WHERE id = %s"
+  i = "UPDATE orders SET done_start = %s WHERE id = %s"
   var = (False, z)
   res = SqlCreateVar(conn,i,var)
 
