@@ -18,7 +18,7 @@ PY = [3, 5, 8, 10, 13, 15]
 Ocupy = [1, 2, 3, 4, 5, 6]
 
 
-SRotate = [6, 7, 8, 16]
+SRotate = [6, 7, 8, 25]
 
 SStorage = 15
 
@@ -223,7 +223,7 @@ def handle_cell_usage(cell):
 # (x_machine_used) flag to tell if x machine is used
 # (px) initial state, (py) final state of the object
 # returns: True if everything was sucessfull and False if any error ocurred
-def handle_request(stack, modbus_user, destino_flag_take, destino_flag_move, cell, first_machine_used, px1, py1, second_machine_used, px2, py2):
+def handle_request(storage_flag, modbus_user, destino_flag_take, cell, first_machine_used, px1, py1, second_machine_used, px2, py2):
   first_machine = cell * 2
   second_machine = cell * 2 + 1
   
@@ -249,6 +249,10 @@ def handle_request(stack, modbus_user, destino_flag_take, destino_flag_move, cel
 
     # conceeds modbus_permission to another thread
     modbus_user.set()
+
+    # wait for storage flag
+    storage_flag.wait()
+    storage_flag.clear()
 
     # if it is possible, flag the storage to output the object
     # wait for permission to use modbus
@@ -293,6 +297,9 @@ def handle_request(stack, modbus_user, destino_flag_take, destino_flag_move, cel
       modbus_user.set()
     
     print('storage sucessfull', threading.current_thread())
+
+    # free storage flag
+    storage_flag.set()
 
     # conceeds modbus_permission to another thread
     modbus_user.set()
@@ -395,7 +402,189 @@ def handle_request(stack, modbus_user, destino_flag_take, destino_flag_move, cel
   # conceeds modbus_permission to another thread
   modbus_user.set()
 
-# puts all destinos to 1 as default
+# verify if robot is available
+# returns: True if robot available, 
+# False if robot is occupied
+def robot_verify_availability():
+  if read_modbus_coil(SOcupyRobot) and client_coils.read_coils(OcupyRobot):
+    return False
+  write_modbus_coil(OcupyRobot, True)
+  return True
+
+# reads robot flag to check if processing has ended
+# returns: True if robot has ended his duty
+# False if the robot hasnt finnished yet
+def robot_check_ready():
+  if read_modbus_coil(SEndRobot):
+    return True
+  return False
+
+def robot_unload():
+  write_modbus_coil(EndRobot, True)
+
+def robot_finish():
+  if read_modbus_coil(SRotate[3]) == True:
+    write_modbus_coil(EndRobot, True)
+
+def handle_robot(storage_flag, modbus_user, destino_flag_take, destino_flag_give, px, py):
+
+  # if it is possible, flag the storage to output the object
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = robot_verify_availability()
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = robot_verify_availability()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  storage_flag.wait()
+  storage_flag.clear()
+
+  # if it is possible, flag the storage to output the object
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = handle_flag_storage_output(px)
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_flag_storage_output(px)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  # waits for the object to be in the belt
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = handle_object_out()
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_object_out()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  # if it is possible, flag the storage to output the object
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = handle_flag_storage_output(py)
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_flag_storage_output(py)
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  # waits for the object to be in the belt
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = handle_object_out()
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = handle_object_out()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  
+  storage_flag.set()
+
+  # wait for the destino flags
+  while not destino_flag_take.isSet():
+    pass
+
+  # reset destino flags
+  destino_flag_take.clear()
+
+  # waits for the robot to end processing
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = robot_check_ready()
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = robot_check_ready()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+  destino_flag_give.set()
+
+  while destino_flag_give.isSet():
+    pass
+
+
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+
+  robot_unload()
+
+
+
+  # wait for permission to use modbus
+  modbus_user.wait()
+  # take the flag for himself
+  modbus_user.clear()
+  h = robot_finish()
+  # conceeds modbus_permission to another thread
+  modbus_user.set()
+  while not h:
+    time.sleep(0.1)
+    # wait for permission to use modbus
+    modbus_user.wait()
+    # take the flag for himself
+    modbus_user.clear()
+    h = robot_finish()
+    # conceeds modbus_permission to another thread
+    modbus_user.set()
+
+
+
+
+# puts all destinos to 2 as default
 def initial_config():
   for destino in range(len(Destino)):
     write_modbus_register(Destino[destino], 2)
@@ -408,25 +597,35 @@ def handle_check_machines():
     machine_states.append(client_coils.read_coils(Ocupy[machine_id], 1).bits[0])
   return machine_states
 
+def handle_check_robot():
+  if client_coils.read_coils(OcupyRobot, 1).bits[0] or read_modbus_coil(SOcupyRobot):
+    return False
+  return True
+
+
 def handle_scheduler(modbus_user):
   # initializations
   previous_rotator_states = [False for _ in range(len(SRotate))]
   previous_machine_states = [False for _ in range(len(SMachine))]
   machine_locks = [False for _ in range(len(SMachine))]
+  robot_lock = False
 
   destino_flag_take_1 = threading.Event()
   destino_flag_take_2 = threading.Event()
   destino_flag_take_3 = threading.Event()
-  destino_flag_move_1 = threading.Event()
-  destino_flag_move_2 = threading.Event()
-  destino_flag_move_3 = threading.Event()
+  destino_flag_take_4 = threading.Event()
+  destino_flag_give = threading.Event()
+
+  storage_flag = threading.Event()
+  storage_flag.set()
 
 
   stack_0 = Queue()
   stack_1 = Queue()
   stack_2 = Queue()
+  stack_3 = Queue()
 
-  th = threading.Thread(target=destino_manager, args=(modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_move_1, destino_flag_move_2, destino_flag_move_3, stack_0, stack_1, stack_2))
+  th = threading.Thread(target=destino_manager, args=(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_give, stack_0, stack_1, stack_2, stack_3))
   th.start()
 
   conn = SqlLog()
@@ -441,6 +640,7 @@ def handle_scheduler(modbus_user):
     modbus_user.wait()
     modbus_user.clear()
     machine_states = handle_check_machines()
+    robot_state = handle_check_robot()
     modbus_user.set()
     time.sleep(3)
 
@@ -454,12 +654,16 @@ def handle_scheduler(modbus_user):
       if machine_locks[machine_state + 1] and machine_states[machine_state + 1]:
         machine_locks[machine_state + 1] = False
 
+      if robot_lock and robot_state:
+        robot_lock = False
+
       # check if there is any free cell
       if not machine_states[machine_state] and not machine_states[machine_state+1] and not machine_locks[machine_state] and not machine_locks[machine_state]:
         # select a order for the cell
-        i = "SELECT * FROM orders WHERE cell = %s and done = %s"
+        i = "SELECT id, cell, maq_1, px_1, py_1, maq_2, px_2, py_2 FROM orders WHERE cell = %s and done = %s"
         vars = (cell + 1, False)
         res = SqlQueryVarOne(conn,i,vars)
+        print(res)
         
         if res == None:
           continue
@@ -475,15 +679,15 @@ def handle_scheduler(modbus_user):
         # create thread to process the order
         if 0 == cell:
           # create thread to process the order
-          th = threading.Thread(target=handle_request, args=(stack_0, modbus_user, destino_flag_take_1, destino_flag_move_1, res[4]-1, res[5], res[6], res[7], res[8], res[9], res[10]))
+          th = threading.Thread(target=handle_request, args=(storage_flag, modbus_user, destino_flag_take_1, res[1]-1, res[2], res[3], res[4], res[5], res[6], res[7]))
           th.start()
         if 1 == cell:
           # create thread to process the order
-          th = threading.Thread(target=handle_request, args=(stack_1, modbus_user, destino_flag_take_2, destino_flag_move_2, res[4]-1, res[5], res[6], res[7], res[8], res[9], res[10]))
+          th = threading.Thread(target=handle_request, args=(storage_flag, modbus_user, destino_flag_take_2, res[1]-1, res[2], res[3], res[4], res[5], res[6], res[7]))
           th.start()
         if 2 == cell:
           # create thread to process the order
-          th = threading.Thread(target=handle_request, args=(stack_2, modbus_user, destino_flag_take_3, destino_flag_move_3, res[4]-1, res[5], res[6], res[7], res[8], res[9], res[10]))
+          th = threading.Thread(target=handle_request, args=(storage_flag, modbus_user, destino_flag_take_3, res[1]-1, res[2], res[3], res[4], res[5], res[6], res[7]))
           th.start()
 
         # update the database to signal order received
@@ -499,7 +703,7 @@ def handle_scheduler(modbus_user):
       # check if there is any free machine 1
       elif not machine_states[machine_state] and not machine_locks[machine_state]:
         # select a order for the machine 1 of the cell
-        i = "SELECT * FROM orders WHERE cell = %s and maq_1 = %s and done = %s"
+        i = "SELECT id, cell, maq_1, px_1, py_1, maq_2, px_2, py_2 FROM orders WHERE cell = %s and maq_1 = %s and done = %s"
         vars = (cell + 1, True, False)
         res = SqlQueryVarOne(conn,i,vars)
 
@@ -517,15 +721,15 @@ def handle_scheduler(modbus_user):
         # create thread to process the order
         if 0 == cell:
           # create thread to process the order
-          th = threading.Thread(target=handle_request, args=(stack_0, modbus_user, destino_flag_take_1, destino_flag_move_1, res[4]-1, res[5], res[6], res[7], res[8], res[9], res[10]))
+          th = threading.Thread(target=handle_request, args=(storage_flag, modbus_user, destino_flag_take_1, res[1]-1, res[2], res[3], res[4], res[5], res[6], res[7]))
           th.start()
         if 1 == cell:
           # create thread to process the order
-          th = threading.Thread(target=handle_request, args=(stack_1, modbus_user, destino_flag_take_2, destino_flag_move_2, res[4]-1, res[5], res[6], res[7], res[8], res[9], res[10]))
+          th = threading.Thread(target=handle_request, args=(storage_flag, modbus_user, destino_flag_take_2, res[1]-1, res[2], res[3], res[4], res[5], res[6], res[7]))
           th.start()
         if 2 == cell:
           # create thread to process the order
-          th = threading.Thread(target=handle_request, args=(stack_2, modbus_user, destino_flag_take_3, destino_flag_move_3, res[4]-1, res[5], res[6], res[7], res[8], res[9], res[10]))
+          th = threading.Thread(target=handle_request, args=(storage_flag, modbus_user, destino_flag_take_3, res[1]-1, res[2], res[3], res[4], res[5], res[6], res[7]))
           th.start()
 
         # update the database to signal order received
@@ -534,6 +738,44 @@ def handle_scheduler(modbus_user):
         res = SqlCreateVar(conn,i,var)
 
         machine_locks[machine_state] = True
+
+        break
+
+      if robot_state and not robot_lock:
+        cell = 3
+        # select a order for the robot
+        i = "SELECT px_1, py_1 FROM orders WHERE cell = %s and done = %s"
+        vars = (cell + 1, False)
+        res = SqlQueryVarOne(conn,i,vars)
+        print(res)
+
+        if res == None:
+          continue
+
+        # refresh stacks for the rotators
+        if 0 <= cell:
+          stack_0.put(cell)
+          stack_0.put(cell)
+        if 1 <= cell:
+          stack_1.put(cell)
+          stack_1.put(cell)
+        if 2 <= cell:
+          stack_2.put(cell)
+          stack_2.put(cell)
+        if 3 <= cell:
+          stack_3.put(cell)
+          stack_3.put(cell)
+
+        # create thread to process the order
+        th = threading.Thread(target=handle_robot, args=(storage_flag, modbus_user, destino_flag_take_4, destino_flag_give, res[0], res[1]))
+        th.start()
+
+        # update the database to signal order received
+        i = "UPDATE orders SET done = %s WHERE id = %s"
+        var = (True, res[0])
+        res = SqlCreateVar(conn,i,var)
+
+        robot_lock = True
 
         break
 
@@ -560,7 +802,7 @@ def handle_destino(rotative_id, rotate):
   return False
 
 # destino manager
-def destino_manager(modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_move_1, destino_flag_move_2, destino_flag_move_3, stack_1, stack_2, stack_3):
+def destino_manager(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_give, stack_1, stack_2, stack_3, stack_4):
   sensor_usage = [False for _ in range(len(SRotate))]
   while 1:
     modbus_user.wait()
@@ -571,8 +813,7 @@ def destino_manager(modbus_user, destino_flag_take_1, destino_flag_take_2, desti
     modbus_user.set()
     time.sleep(0.3)
 
-    #print(stack_1.qsize(), stack_2.qsize(), stack_3.qsize(), rotate_sensors, sensor_usage, [destino_flag_take_1.isSet(), destino_flag_take_2.isSet(), destino_flag_take_3.isSet()], [destino_flag_move_1.isSet(), destino_flag_move_2.isSet(), destino_flag_move_3.isSet()])
-    print(list(stack_1.queue), list(stack_2.queue), list(stack_3.queue))
+    print(list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue))
 
 
     for rotate_sensor in range(len(rotate_sensors)):
@@ -600,7 +841,16 @@ def destino_manager(modbus_user, destino_flag_take_1, destino_flag_take_2, desti
             destino_flag_take_3.set()
           else:
             handle_destino(rotate_sensor, False)
-      
+        elif rotate_sensor == 3:
+          if stack_4.get() == 3:
+            handle_destino(rotate_sensor, True)
+            destino_flag_take_4.set()
+          else:
+            handle_destino(rotate_sensor, False)
+
+    if destino_flag_give.isSet():
+      if stack_4.empty():
+        destino_flag_give.clear()
 
 
 # tests for handle_request
@@ -611,31 +861,6 @@ modbus_user = threading.Event()
 modbus_user.set()
 
 handle_scheduler(modbus_user)
-
-'''th1 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 7, True, 7, 8, [0]))
-th1.start()
-
-time.sleep(5)
-
-th2 = threading.Thread(target=handle_request, args=(modbus_user, 1, True, 1, 7, True, 7, 8, [1]))
-th2.start()
-
-time.sleep(5)
-
-th3 = threading.Thread(target=handle_request, args=(modbus_user, 2, True, 2, 8, True, 8, 9, [2]))
-th3.start()
-
-time.sleep(50)
-
-th4 = threading.Thread(target=handle_request, args=(modbus_user, 0, True, 1, 3, False, 10, 10, [0]))
-th4.start()
-
-  
-th1.join()
-th2.join()
-th3.join()
-th4.join()'''
-
 
 client_output.close()
 client_coils.close()
