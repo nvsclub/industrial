@@ -27,6 +27,8 @@ OcupyPusher = [9, 10, 11]
 
 Cargo = 12
 
+LowerCargo = 13
+
 
 SOcupy = [0, 1, 2, 3, 4, 5]
 
@@ -46,7 +48,11 @@ SRoller = [30, 31, 32]
 
 SBeltCargo = 21
 
+SLowerBeltCargo = 22
+
 SCargo = 23
+
+SLowerCargo = 24
 
 TCP_IP_coils = '127.0.0.1'
 TCP_PORT_coils = '5503'
@@ -396,7 +402,7 @@ def handle_request(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_tak
         # take the flag for himself
         modbus_user.clear()
         handle_machine_processing(machine, 10, 10)
-        print('dei 10 e 10')
+        #print('dei 10 e 10')
 
       # conceeds modbus_permission to another thread
       modbus_user.set()
@@ -515,7 +521,7 @@ def robot_verify_availability():
 # False if the robot hasnt finnished yet
 def robot_check_ready():
   if read_modbus_coil(SEndRobot):
-    print(read_modbus_coil(SEndRobot))
+    #print(read_modbus_coil(SEndRobot))
     return True
   return False
 
@@ -627,7 +633,7 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
   storage_flag.set()
 
 
-  print('storage sucess')
+  #print('storage sucess')
 
   # wait for the destino flags
   while not destino_flag_take.isSet():
@@ -636,7 +642,7 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
   # reset destino flags
   destino_flag_take.clear()
 
-  print('took flag')
+  #print('took flag')
 
   # waits for the robot to end processing
   # wait for permission to use modbus
@@ -656,12 +662,12 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
     # conceeds modbus_permission to another thread
     modbus_user.set()
 
-  print('received ready state')
+  #print('received ready state')
 
   destino_flag_give.set()
 
   while destino_flag_give.isSet():
-    print('waiting for flag', destino_flag_give.isSet())
+    #print('waiting for flag', destino_flag_give.isSet())
     pass
 
 
@@ -670,7 +676,7 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
   # take the flag for himself
   modbus_user.clear()
 
-  print('started unloading')
+  #print('started unloading')
 
 
   robot_unload(stack_3, stack_4)
@@ -695,7 +701,7 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
     # conceeds modbus_permission to another thread
     modbus_user.set()
 
-  print('finnished unloading')
+  #print('finnished unloading')
   # update the database to signal order received
   query = "UPDATE orders SET done_end = %s WHERE id = %s"
   var = (True, sql_id)
@@ -858,6 +864,55 @@ def handle_cargo(modbus_user, destino_cargo):
     return
   modbus_user.set()
 
+def handle_lower_cargo(modbus_user):
+  while 1:
+    modbus_user.wait()
+    modbus_user.clear()
+    h = read_modbus_coil(SLowerCargo)
+    modbus_user.set()
+
+    while h:
+      time.sleep(0.1)
+      modbus_user.wait()
+      modbus_user.clear()
+      h = read_modbus_coil(SLowerCargo)
+      modbus_user.set()
+
+
+    modbus_user.wait()
+    modbus_user.clear()
+
+    write_modbus_coil(LowerCargo, True)
+
+    modbus_user.set()
+
+    #print('intermedi 1')
+
+    modbus_user.wait()
+    modbus_user.clear()
+    h = read_modbus_coil(SLowerBeltCargo)
+    modbus_user.set()
+
+    while h:
+      time.sleep(0.1)
+      modbus_user.wait()
+      modbus_user.clear()
+      h = read_modbus_coil(SLowerBeltCargo)
+      modbus_user.set()
+    
+    #print('starting end process')
+
+    time.sleep(0.2)
+
+    modbus_user.wait()
+    modbus_user.clear()
+
+    write_modbus_coil(LowerCargo, False)
+
+    modbus_user.set()
+
+    #print('did it')
+
 
 def handle_scheduler(modbus_user):
   # initializations
@@ -896,6 +951,9 @@ def handle_scheduler(modbus_user):
   th.start()
 
   conn = SqlLog()
+
+  th = threading.Thread(target=handle_lower_cargo, args=(modbus_user,))
+  th.start()
 
   i = "SET search_path TO ii"
   res = SqlQuery(conn,i)
@@ -1109,7 +1167,7 @@ def destino_manager(storage_flag, modbus_user, destino_cargo, destino_flag_take_
     modbus_user.set()
     time.sleep(0.3)
 
-    print(list(stack_0.queue), list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue), list(stack_5.queue), list(stack_6.queue), list(stack_7.queue))
+    #print(list(stack_0.queue), list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue), list(stack_5.queue), list(stack_6.queue), list(stack_7.queue))
 
     for rotate_sensor in range(len(rotate_sensors)):
       if not rotate_sensors[rotate_sensor]:
