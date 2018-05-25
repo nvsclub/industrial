@@ -25,6 +25,8 @@ EndRobot = 8
 
 OcupyPusher = [9, 10, 11]
 
+Cargo = 12
+
 
 SOcupy = [0, 1, 2, 3, 4, 5]
 
@@ -41,6 +43,10 @@ SEndRobot = 17
 SBeltPusher = [27, 28, 29]
 
 SRoller = [30, 31, 32]
+
+SBeltCargo = 21
+
+SCargo = 23
 
 TCP_IP_coils = '127.0.0.1'
 TCP_PORT_coils = '5503'
@@ -509,15 +515,18 @@ def robot_verify_availability():
 # False if the robot hasnt finnished yet
 def robot_check_ready():
   if read_modbus_coil(SEndRobot):
+    print(read_modbus_coil(SEndRobot))
     return True
   return False
 
-def robot_unload():
+def robot_unload(stack_3, stack_4):
   write_modbus_coil(EndRobot, True)
+  stack_3.put(10)
+  stack_4.put(10)
 
 def robot_finish():
-  if read_modbus_coil(SRotate[3]) == True:
-    write_modbus_coil(EndRobot, True)
+  write_modbus_coil(EndRobot, False)
+  write_modbus_coil(OcupyRobot, False)
 
 def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take, destino_flag_give, px, py, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7):
 
@@ -617,12 +626,17 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
   
   storage_flag.set()
 
+
+  print('storage sucess')
+
   # wait for the destino flags
   while not destino_flag_take.isSet():
     pass
 
   # reset destino flags
   destino_flag_take.clear()
+
+  print('took flag')
 
   # waits for the robot to end processing
   # wait for permission to use modbus
@@ -642,9 +656,12 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
     # conceeds modbus_permission to another thread
     modbus_user.set()
 
+  print('received ready state')
+
   destino_flag_give.set()
 
   while destino_flag_give.isSet():
+    print('waiting for flag', destino_flag_give.isSet())
     pass
 
 
@@ -653,9 +670,13 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
   # take the flag for himself
   modbus_user.clear()
 
-  robot_unload()
+  print('started unloading')
 
 
+  robot_unload(stack_3, stack_4)
+
+
+  time.sleep(0.2)
 
   # wait for permission to use modbus
   modbus_user.wait()
@@ -674,10 +695,11 @@ def handle_robot(sql_id, sql_conn, storage_flag, modbus_user, destino_flag_take,
     # conceeds modbus_permission to another thread
     modbus_user.set()
 
-    # update the database to signal order received
-    query = "UPDATE orders SET done_end = %s WHERE id = %s"
-    var = (True, sql_id)
-    SqlCreateVar(sql_conn,query,var)
+  print('finnished unloading')
+  # update the database to signal order received
+  query = "UPDATE orders SET done_end = %s WHERE id = %s"
+  var = (True, sql_id)
+  SqlCreateVar(sql_conn,query,var)
 
 
 def handle_verify_pusher_ocupation(id):
@@ -817,6 +839,24 @@ def handle_check_pushers():
     pusher_states.append(client_coils.read_coils(OcupyPusher[pusher_id], 1).bits[0])
   return pusher_states
   
+def handle_cargo(modbus_user, destino_cargo):
+  #write mobus pass
+  modbus_user.wait()
+  modbus_user.clear()
+  write_modbus_coil(Cargo, True)
+  modbus_user.set()
+
+  time.sleep(0.1)
+
+
+  modbus_user.wait()
+  modbus_user.clear()
+  if not read_modbus_coil(SBeltCargo):
+    write_modbus_coil(Cargo, False)
+    modbus_user.set()
+    destino_cargo.clear()
+    return
+  modbus_user.set()
 
 
 def handle_scheduler(modbus_user):
@@ -836,6 +876,7 @@ def handle_scheduler(modbus_user):
   destino_flag_push_1 = threading.Event()
   destino_flag_push_2 = threading.Event()
   destino_flag_push_3 = threading.Event()
+  destino_cargo = threading.Event()
   
 
   storage_flag = threading.Event()
@@ -851,7 +892,7 @@ def handle_scheduler(modbus_user):
   stack_6 = Queue()
   stack_7 = Queue()
 
-  th = threading.Thread(target=destino_manager, args=(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_take_5, destino_flag_give, destino_flag_push_1, destino_flag_push_2, destino_flag_push_3, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7))
+  th = threading.Thread(target=destino_manager, args=(storage_flag, modbus_user, destino_cargo, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_take_5, destino_flag_give, destino_flag_push_1, destino_flag_push_2, destino_flag_push_3, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7))
   th.start()
 
   conn = SqlLog()
@@ -964,7 +1005,7 @@ def handle_scheduler(modbus_user):
       if not res == None:
 
         # create thread to process the order
-        th = threading.Thread(target=handle_robot, args=(res[0], conn, storage_flag, modbus_user, destino_flag_take_5, destino_flag_give, res[0], res[1], stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7))
+        th = threading.Thread(target=handle_robot, args=(res[0], conn, storage_flag, modbus_user, destino_flag_take_4, destino_flag_give, res[0], res[1], stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7))
         th.start()
 
         # update the database to signal order received
@@ -1019,6 +1060,16 @@ def handle_scheduler(modbus_user):
 
         break
 
+    if destino_cargo.isSet():
+      stack_4.put(4)
+      stack_5.put(10)
+      stack_6.put(10)
+      stack_7.put(10)
+
+      th = threading.Thread(target=handle_cargo, args=(modbus_user, destino_cargo))
+      th.start()
+
+      
 
   SqlClose(conn)
 
@@ -1043,7 +1094,7 @@ def handle_destino(rotative_id, rotate, to_read):
   return False
 
 # destino manager
-def destino_manager(storage_flag, modbus_user, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_take_5, destino_flag_give, destino_flag_push_1, destino_flag_push_2, destino_flag_push_3, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7):
+def destino_manager(storage_flag, modbus_user, destino_cargo, destino_flag_take_1, destino_flag_take_2, destino_flag_take_3, destino_flag_take_4, destino_flag_take_5, destino_flag_give, destino_flag_push_1, destino_flag_push_2, destino_flag_push_3, stack_0, stack_1, stack_2, stack_3, stack_4, stack_5, stack_6, stack_7):
   sensor_usage = [False for _ in range(len(SRotate))]
   for _ in range(len(SBeltPusher)):
     sensor_usage.append(False)
@@ -1058,7 +1109,7 @@ def destino_manager(storage_flag, modbus_user, destino_flag_take_1, destino_flag
     modbus_user.set()
     time.sleep(0.3)
 
-    #print(list(stack_0.queue), list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue), list(stack_5.queue), list(stack_6.queue), list(stack_7.queue))
+    print(list(stack_0.queue), list(stack_1.queue), list(stack_2.queue), list(stack_3.queue), list(stack_4.queue), list(stack_5.queue), list(stack_6.queue), list(stack_7.queue))
 
     for rotate_sensor in range(len(rotate_sensors)):
       if not rotate_sensors[rotate_sensor]:
@@ -1123,6 +1174,11 @@ def destino_manager(storage_flag, modbus_user, destino_flag_take_1, destino_flag
       if stack_4.empty():
         destino_flag_give.clear()
         handle_destino(3, False, SRotate[3])
+
+    if not read_modbus_coil(SCargo) and stack_4.empty():
+      if not destino_cargo.isSet():
+        #print('destino set')
+        destino_cargo.set()
 
     modbus_user.set()
 
