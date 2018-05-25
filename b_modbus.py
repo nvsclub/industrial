@@ -17,6 +17,8 @@ PY = [3, 5, 8, 10, 13, 15]
 
 Ocupy = [1, 2, 3, 4, 5, 6]
 
+Storage = 14
+
 OcupyRobot = 7
 
 EndRobot = 8
@@ -30,7 +32,7 @@ SRotate = [6, 7, 8, 25, 26]
 
 SMachine = [9, 10, 11, 12, 13, 14]
 
-SStorage = 15
+SStorage = 33
 
 SOcupyRobot = 16
 
@@ -159,10 +161,10 @@ def SqlClose(myconn):
 # True if everything worked
 def handle_flag_storage_output(px):
   if read_modbus_coil(SStorage) or client_coils.read_coils(EnableStorage, 1).bits[0]:
-    print(read_modbus_coil(SStorage), client_coils.read_coils(EnableStorage, 1).bits[0])
     return False
   # takes the object out of the storage
   write_modbus_register(TakeObjectID, px)
+  write_modbus_coil(Storage, False)
   write_modbus_coil(EnableStorage, True)
   return True
 
@@ -174,6 +176,7 @@ def handle_object_out():
   if read_modbus_coil(SStorage):
     # resets the storage variable
     write_modbus_coil(EnableStorage, False)
+    write_modbus_coil(Storage, True)
     return True
   return False
 
